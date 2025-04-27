@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.financeflow.ui.theme.FinanceFlowTheme
+import com.example.financeflow.viewmodel.Expense
 import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.charts.PieChart
@@ -37,12 +38,9 @@ import com.github.mikephil.charting.formatter.PercentFormatter
 import com.google.accompanist.pager.ExperimentalPagerApi
 import com.google.accompanist.pager.HorizontalPager
 import com.google.accompanist.pager.rememberPagerState
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(ExperimentalPagerApi::class)
 class StatisticsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,7 +55,6 @@ class StatisticsActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalPagerApi::class)
 @Composable
 fun StatisticsScreen(sharedPreferences: SharedPreferences) {
     val context = LocalContext.current
@@ -77,8 +74,8 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
         animationSpec = tween(durationMillis = 1000)
     )
 
-    // Завантажуємо витрати
-    val expenses = loadExpenses(sharedPreferences)
+    // Завантажуємо всі витрати з SharedPreferences (включно з минулими місяцями)
+    val expenses = loadAllExpenses(sharedPreferences)
     val dateFormatMonth = SimpleDateFormat("yyyy-MM", Locale.getDefault())
     val dateFormatFull = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
     val uniqueMonths = expenses.map { expense ->
@@ -407,15 +404,6 @@ fun CustomLegend(expenses: List<Expense>) {
             Spacer(modifier = Modifier.height(4.dp))
         }
     }
-}
-
-fun loadExpenses(sharedPreferences: SharedPreferences): List<Expense> {
-    val gson = Gson()
-    val json = sharedPreferences.getString("expenses_history", null)
-    return if (json != null) {
-        val type = object : TypeToken<List<Expense>>() {}.type
-        gson.fromJson(json, type) ?: emptyList()
-    } else emptyList()
 }
 
 fun getColorList(): List<Int> {

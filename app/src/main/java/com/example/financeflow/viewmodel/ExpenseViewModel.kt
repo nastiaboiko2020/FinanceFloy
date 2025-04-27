@@ -3,52 +3,40 @@ package com.example.financeflow.viewmodel
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
-import com.example.financeflow.Expense
+import java.math.BigDecimal
+
+// Імпортуємо Expense, якщо він у тому ж пакеті
+// Якщо Expense у іншому пакеті, наприклад com.example.financeflow.model, змініть імпорт:
+// import com.example.financeflow.model.Expense
 
 class ExpenseViewModel : ViewModel() {
-    private val _balance = mutableStateOf(0.0)
-    val balance: State<Double> get() = _balance
+    private val _balance = mutableStateOf(BigDecimal.ZERO)
+    val balance: State<BigDecimal> get() = _balance
 
-    private val _categoriesBalance = mutableStateOf(
-        mapOf<String, Double>(
-            "Розваги" to 0.0,
-            "Подарунки" to 0.0,
-            "Спорт" to 0.0,
-            "Освіта" to 0.0,
-            "Одяг" to 0.0,
-            "Техніка" to 0.0
-        )
-    )
-    val categoriesBalance: State<Map<String, Double>> get() = _categoriesBalance
-
-    // Додаємо список витрат
-    private val _expenses = mutableStateOf<List<Expense>>(emptyList())
+    private val _expenses = mutableStateOf<MutableList<Expense>>(mutableListOf())
     val expenses: State<List<Expense>> get() = _expenses
 
-    fun addExpense(category: String, amount: Double, date: String = "") {
-        // Оновлюємо баланс категорії
-        _categoriesBalance.value = _categoriesBalance.value.toMutableMap().apply {
-            put(category, (this[category] ?: 0.0) + amount)
-        }
-        // Зменшуємо загальний баланс (оскільки це витрата)
-        _balance.value -= amount
-        // Додаємо витрату до історії
-        _expenses.value = _expenses.value + Expense(category, amount, date)
+    // Додаємо змінну для балансів по категоріях
+    private val _categoriesBalance = mutableStateOf<MutableMap<String, BigDecimal>>(mutableMapOf())
+    val categoriesBalance: State<Map<String, BigDecimal>> get() = _categoriesBalance
+
+    fun setBalance(newBalance: BigDecimal) {
+        _balance.value = newBalance
+    }
+
+    fun setExpenses(newExpenses: MutableList<Expense>) {
+        _expenses.value = newExpenses
+    }
+
+    fun addExpense(category: String, amount: BigDecimal, date: String) {
+        val currentExpenses = _expenses.value.toMutableList()
+        currentExpenses.add(Expense(category, amount, date))
+        _expenses.value = currentExpenses
     }
 
     fun addCategory(category: String) {
         _categoriesBalance.value = _categoriesBalance.value.toMutableMap().apply {
-            put(category, 0.0)
+            put(category, BigDecimal.ZERO) // Ініціалізуємо нову категорію з балансом 0
         }
-    }
-
-    // Метод для ініціалізації списку витрат із SharedPreferences
-    fun setExpenses(expenses: List<Expense>) {
-        _expenses.value = expenses
-    }
-
-    // Метод для встановлення балансу (наприклад, при додаванні коштів)
-    fun setBalance(amount: Double) {
-        _balance.value += amount
     }
 }
