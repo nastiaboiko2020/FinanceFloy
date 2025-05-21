@@ -47,7 +47,11 @@ class StatisticsActivity : ComponentActivity() {
         Log.d("StatisticsActivity", "onCreate started")
         val sharedPreferences = getSharedPreferences("finance_flow_prefs", MODE_PRIVATE)
         setContent {
-            FinanceFlowTheme {
+            FinanceFlowTheme(
+                darkTheme = false, // Завжди світла тема
+                useAIChatTheme = false,
+                useFinanceFlowTheme = true
+            ) {
                 StatisticsScreen(sharedPreferences)
             }
         }
@@ -60,7 +64,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
 
-    // Стан для анімації
     var startAnimation by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         startAnimation = true
@@ -74,7 +77,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
         animationSpec = tween(durationMillis = 1000)
     )
 
-    // Завантажуємо всі витрати з SharedPreferences (включно з минулими місяцями)
     val expenses = loadAllExpenses(sharedPreferences)
     val dateFormatMonth = SimpleDateFormat("yyyy-MM", Locale.getDefault())
     val dateFormatFull = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
@@ -90,9 +92,8 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(ComposeColor(0xFFF5F7FA)) // Світло-сірий фон
+            .background(ComposeColor(0xFFF5F7FA)) // Фон для світлої теми
     ) {
-        // Градієнтний верхній блок
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -100,8 +101,8 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
                 .background(
                     brush = Brush.verticalGradient(
                         colors = listOf(
-                            ComposeColor(0xFF1A3D62),
-                            ComposeColor(0xFF2E5B8C)
+                            ComposeColor(0xFF1A3D62), // Темно-синій
+                            ComposeColor(0xFF2E5B8C)  // Світліший синій
                         )
                     )
                 )
@@ -112,7 +113,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
                 .fillMaxSize()
                 .padding(top = 16.dp)
         ) {
-            // Заголовок
             Text(
                 text = "Статистика витрат",
                 style = TextStyle(
@@ -126,14 +126,12 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
                     .graphicsLayer(alpha = fadeIn, translationY = translateY)
             )
 
-            // Прокручувана область із діаграмами
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(scrollState)
                     .padding(horizontal = 16.dp)
             ) {
-                // Кругова діаграма
                 ChartWithPager(
                     title = "Витрати за місяць",
                     uniqueMonths = uniqueMonths,
@@ -179,7 +177,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Стовпчаста діаграма
                 ChartWithPager(
                     title = "Середня витрата за категоріями",
                     uniqueMonths = uniqueMonths,
@@ -216,7 +213,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Лінійна діаграма
                 ChartWithPager(
                     title = "Витрати по днях",
                     uniqueMonths = uniqueMonths,
@@ -243,7 +239,6 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
                 )
             }
 
-            // Кнопка "Назад"
             Button(
                 onClick = { (context as? Activity)?.finish() },
                 modifier = Modifier
@@ -270,7 +265,9 @@ fun StatisticsScreen(sharedPreferences: SharedPreferences) {
 fun configurePieChart(chart: PieChart, expenses: List<Expense>) {
     chart.legend.isEnabled = false
     val entries = expenses.groupBy { it.category }
-        .map { (category, list) -> PieEntry(list.sumOf { it.amount }.toFloat(), "") }
+        .map { (category, list) ->
+            PieEntry(list.sumOf { it.amount.toDouble() }.toFloat(), "")
+        }
     val dataSet = PieDataSet(entries, "Категорії")
     dataSet.colors = getColorList()
     dataSet.valueTextColor = Color.BLACK
@@ -281,6 +278,8 @@ fun configurePieChart(chart: PieChart, expenses: List<Expense>) {
     chart.description.isEnabled = false
     chart.setBackgroundColor(Color.TRANSPARENT)
     chart.animateY(1000)
+    chart.setHoleColor(Color.WHITE)
+    chart.setTransparentCircleColor(Color.WHITE)
     chart.invalidate()
 }
 
@@ -288,7 +287,7 @@ fun configureBarChart(chart: BarChart, expenses: List<Expense>) {
     val entries = expenses.groupBy { it.category }
         .entries.mapIndexed { index, entry ->
             val (category, list) = entry
-            val average = if (list.isNotEmpty()) list.sumOf { it.amount }.toFloat() / list.size else 0f
+            val average = if (list.isNotEmpty()) list.sumOf { it.amount.toDouble() }.toFloat() / list.size else 0f
             BarEntry(index.toFloat(), average)
         }
     val dataSet = BarDataSet(entries, "Категорії")
@@ -299,6 +298,7 @@ fun configureBarChart(chart: BarChart, expenses: List<Expense>) {
     chart.axisLeft.textColor = Color.BLACK
     chart.axisRight.textColor = Color.BLACK
     chart.xAxis.isEnabled = false
+    chart.setBackgroundColor(Color.TRANSPARENT)
     chart.invalidate()
 }
 
@@ -308,7 +308,7 @@ fun configureLineChart(chart: LineChart, expenses: List<Expense>) {
     val entries = expenses.groupBy { expense ->
         dateFormatDay.format(dateFormatFull.parse(expense.date) ?: Date()).toInt()
     }.map { (day, list) ->
-        Entry(day.toFloat(), list.sumOf { it.amount }.toFloat())
+        Entry(day.toFloat(), list.sumOf { it.amount.toDouble() }.toFloat())
     }.sortedBy { it.x }
     val dataSet = LineDataSet(entries, "Дні")
     dataSet.color = Color.parseColor("#1E88E5")
@@ -319,6 +319,7 @@ fun configureLineChart(chart: LineChart, expenses: List<Expense>) {
     chart.axisLeft.textColor = Color.BLACK
     chart.axisRight.textColor = Color.BLACK
     chart.xAxis.textColor = Color.BLACK
+    chart.setBackgroundColor(Color.TRANSPARENT)
     chart.invalidate()
 }
 
@@ -329,7 +330,7 @@ fun ChartWithPager(
     uniqueMonths: List<String>,
     chartContent: @Composable (String) -> Unit
 ) {
-    val pagerState = rememberPagerState(initialPage = uniqueMonths.size - 1)
+    val pagerState = rememberPagerState(initialPage = if (uniqueMonths.isNotEmpty()) uniqueMonths.size - 1 else 0)
 
     Card(
         modifier = Modifier
@@ -349,13 +350,13 @@ fun ChartWithPager(
             ) {
                 Text(
                     text = title,
-                    color = ComposeColor(0xFF1A3D62),
+                    color = ComposeColor.Black,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = uniqueMonths.getOrElse(pagerState.currentPage) { "Немає даних" },
-                    color = ComposeColor(0xFF1A3D62),
+                    color = ComposeColor.Black,
                     fontSize = 14.sp
                 )
             }
@@ -376,14 +377,14 @@ fun ChartWithPager(
 @Composable
 fun CustomLegend(expenses: List<Expense>) {
     val categories = expenses.groupBy { it.category }
-        .map { (category, list) -> category to list.sumOf { it.amount }.toFloat() }
+        .map { (category, list) -> category to list.sumOf { it.amount.toDouble() }.toFloat() }
     val colors = getColorList().map { ComposeColor(it) }
     val legendScrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
-            .heightIn(max = 180.dp) // Обмежуємо максимальну висоту
-            .verticalScroll(legendScrollState) // Додаємо прокрутку
+            .heightIn(max = 180.dp)
+            .verticalScroll(legendScrollState)
             .padding(start = 8.dp)
     ) {
         categories.forEachIndexed { index, (category, _) ->

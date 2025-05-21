@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "928086273612",
+    "project_id": "financeflow-8c784",
+    "storage_bucket": "financeflow-8c784.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:928086273612:android:443b96f9cdeb2509794ee9",
+        "android_client_info": {
+          "package_name": "com.example.financeflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBQ1f4Jp7zw46KPqnNirPKjFcyprdUqa7Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

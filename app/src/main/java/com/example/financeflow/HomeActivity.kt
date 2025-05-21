@@ -58,6 +58,15 @@ import retrofit2.http.GET
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Chat
 
 class HomeActivity : ComponentActivity() {
     private lateinit var expenseViewModel: ExpenseViewModel
@@ -119,13 +128,12 @@ class HomeActivity : ComponentActivity() {
                 android.widget.Toast.makeText(this, "Не вдалося розпізнати суму: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
             }
     }
-
     private fun processImageFromUri(uri: Uri) {
         try {
             val bitmap = MediaStore.Images.Media.getBitmap(contentResolver, uri)
             processImage(bitmap)
         } catch (e: Exception) {
-            onImageProcessed?.invoke("0.00") // Повертаємо "0.00" замість "0.0" для консистентності
+            onImageProcessed?.invoke("0.00") // Повертаємо "0.00" для консистентності
             android.widget.Toast.makeText(this, "Помилка завантаження зображення: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
@@ -133,11 +141,11 @@ class HomeActivity : ComponentActivity() {
     private fun extractAmountFromText(visionText: Text): String {
         Log.d("HomeActivity", "Розпізнаний текст: ${visionText.text}")
 
-        // Список ключових слів для пошуку суми до сплати
-        val keywords = listOf(
-            "Сума", "ПІДСУМОК", "До сплати", "Всього", "Загальна сума", "СУМА ГРН", "СУМА, ГРН",
-            "Total", "Paid", "Amount", "To pay", "CYMA", "Загальна", "ПІДСУМОК ГРН", "Ao cnnaTu", "Cyna", "cYMA"
-        )
+        // Ключові слова для "До сплати" (перший пріоритет)
+        val primaryKeywords = listOf("До сплати", "Ao cnnaTu", "To pay")
+
+        // Ключові слова для "Сума" (другий пріоритет)
+        val secondaryKeywords = listOf("Сума", "СУМА ГРН", "СУМА, ГРН", "CYMA", "Cyna", "cYMA")
 
         // Список слів для виключення (готівка, решта, знижки тощо)
         val excludeKeywords = listOf(
@@ -178,215 +186,182 @@ class HomeActivity : ComponentActivity() {
             return String.format("%.2f", value)
         }
 
-        // Спочатку шукаємо суму в тому ж рядку (без координат)
-        val amountRegex = Regex("""(\d+[,.]\d{2})\s*(?:грн|UAH|rpH\.|TPH)?""", RegexOption.IGNORE_CASE)
-        for (block in visionText.textBlocks) {
-            for (line in block.lines) {
-                val lineText = line.text
-                if (keywords.any { keyword -> lineText.contains(keyword, ignoreCase = true) }) {
-                    Log.d("HomeActivity", "Знайдено ключове слово в рядку: $lineText")
-                    // Шукаємо число в тому ж рядку
-                    val amountMatch = amountRegex.find(lineText)
-                    if (amountMatch != null) {
-                        val amountStr = amountMatch.groupValues[1].replace(",", ".")
-                        val num = amountStr.toDoubleOrNull() ?: continue
-                        val digitCount = amountStr.replace(".", "").length
-                        val position = visionText.text.indexOf(amountMatch.value)
-                        val isNotYear = num !in 1900.0..2099.0
-                        val isNotMultiplier = !visionText.text.contains(Regex("""\b${amountMatch.groupValues[1]}\b\s*[xX]""")) &&
-                                !visionText.text.contains(Regex("""\d+\s*[xX]\s*${amountMatch.groupValues[1]}\b"""))
-                        val isNotDate = !isPartOfDate(amountStr, visionText.text, position)
-                        val isNotPercentage = !isPartOfPercentage(amountStr, visionText.text, position)
+        // Функція для пошуку суми в рядку або після ключового слова
+        fun findAmount(keywords: List<String>, searchNextLines: Boolean = false): Boolean {
+            val amountRegex = Regex("""(\d+[,.]\d{2})\s*(?:грн|UAH|rpH\.|TPH)?""", RegexOption.IGNORE_CASE)
 
-                        val isNotExcluded = excludeKeywords.none { keyword ->
-                            val regex = Regex("""${keyword}\s*[:=]?\s*${amountMatch.groupValues[1]}""", RegexOption.IGNORE_CASE)
-                            regex.containsMatchIn(visionText.text)
-                        }
-
-                        val hasCurrency = amountMatch.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
-
-                        if (digitCount <= 6 && num in 10.0..100_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
-                            val roundedNum = roundToTwoDecimals(num)
-                            candidates.add(AmountCandidate(roundedNum, position, 0, "In same line: ${amountMatch.value}", hasCurrency, 0))
-                            Log.d("HomeActivity", "Знайдено суму в тому ж рядку: $roundedNum (позиція: $position, має валюту: $hasCurrency)")
-                        } else {
-                            if (!isNotExcluded) {
-                                Log.d("HomeActivity", "Виключено суму через excludeKeywords: $amountStr")
-                            }
-                            if (!isNotDate) {
-                                Log.d("HomeActivity", "Виключено суму через формат дати: $amountStr")
-                            }
-                            if (!isNotPercentage) {
-                                Log.d("HomeActivity", "Виключено суму через відсоток: $amountStr")
-                            }
-                            if (num < 10.0) {
-                                Log.d("HomeActivity", "Виключено суму через малий розмір: $amountStr")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Якщо сума не знайдена в тому ж рядку, пробуємо знайти з використанням координат
-        if (candidates.isEmpty()) {
-            Log.d("HomeActivity", "Сума не знайдена в тому ж рядку, пробуємо знайти з використанням координат")
-            var boundingBoxAvailable = false
+            // Спочатку шукаємо суму в тому ж рядку
             for (block in visionText.textBlocks) {
                 for (line in block.lines) {
                     val lineText = line.text
                     if (keywords.any { keyword -> lineText.contains(keyword, ignoreCase = true) }) {
-                        // Знаходимо координати ключового слова
-                        val keywordElement = line.elements.firstOrNull { element ->
-                            keywords.any { keyword -> element.text.contains(keyword, ignoreCase = true) }
-                        } ?: continue
-
-                        val keywordBoundingBox = keywordElement.boundingBox
-                        if (keywordBoundingBox == null) {
-                            Log.d("HomeActivity", "boundingBox для ключового слова '${keywordElement.text}' недоступний (null)")
-                            continue
-                        }
-
-                        boundingBoxAvailable = true
-                        val keywordX = keywordBoundingBox.left
-                        val keywordY = keywordBoundingBox.top
-                        Log.d("HomeActivity", "Знайдено ключове слово '${keywordElement.text}' на позиції (x: $keywordX, y: $keywordY)")
-
-                        // Шукаємо числа в межах невеликої вертикальної відстані
-                        for (otherBlock in visionText.textBlocks) {
-                            for (otherLine in otherBlock.lines) {
-                                for (element in otherLine.elements) {
-                                    val amountMatch = amountRegex.find(element.text) ?: continue
-                                    val amountStr = amountMatch.groupValues[1].replace(",", ".")
-                                    val num = amountStr.toDoubleOrNull() ?: continue
-                                    val digitCount = amountStr.replace(".", "").length
-                                    val elementBoundingBox = element.boundingBox
-                                    if (elementBoundingBox == null) {
-                                        Log.d("HomeActivity", "boundingBox для елемента '${element.text}' недоступний (null)")
-                                        continue
-                                    }
-
-                                    val elementX = elementBoundingBox.left
-                                    val elementY = elementBoundingBox.top
-                                    Log.d("HomeActivity", "Знайдено елемент '${element.text}' на позиції (x: $elementX, y: $elementY)")
-
-                                    // Перевіряємо, чи число праворуч від ключового слова
-                                    if (elementX <= keywordX) continue // Число має бути праворуч
-
-                                    // Перевіряємо, чи число в межах невеликої вертикальної відстані (100 пікселів)
-                                    val yDifference = Math.abs(elementY - keywordY)
-                                    if (yDifference > 100) continue // Допускаємо зміщення до 100 пікселів по Y
-
-                                    val isNotYear = num !in 1900.0..2099.0
-                                    val isNotMultiplier = !visionText.text.contains(Regex("""\b${amountMatch.groupValues[1]}\b\s*[xX]""")) &&
-                                            !visionText.text.contains(Regex("""\d+\s*[xX]\s*${amountMatch.groupValues[1]}\b"""))
-                                    val isNotDate = !isPartOfDate(amountStr, visionText.text, visionText.text.indexOf(amountStr))
-                                    val isNotPercentage = !isPartOfPercentage(amountStr, visionText.text, visionText.text.indexOf(amountStr))
-
-                                    val isNotExcluded = excludeKeywords.none { keyword ->
-                                        val regex = Regex("""${keyword}\s*[:=]?\s*${amountMatch.groupValues[1]}""", RegexOption.IGNORE_CASE)
-                                        regex.containsMatchIn(visionText.text)
-                                    }
-
-                                    val hasCurrency = amountMatch.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
-
-                                    if (digitCount <= 6 && num in 10.0..100_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
-                                        val roundedNum = roundToTwoDecimals(num)
-                                        candidates.add(AmountCandidate(roundedNum, elementX, elementY, "After keyword: ${element.text}", hasCurrency, yDifference))
-                                        Log.d("HomeActivity", "Знайдено суму праворуч від ключового слова: $roundedNum (x: $elementX, y: $elementY, має валюту: $hasCurrency, yDifference: $yDifference)")
-                                    } else {
-                                        if (!isNotExcluded) {
-                                            Log.d("HomeActivity", "Виключено суму через excludeKeywords: $amountStr")
-                                        }
-                                        if (!isNotDate) {
-                                            Log.d("HomeActivity", "Виключено суму через формат дати: $amountStr")
-                                        }
-                                        if (!isNotPercentage) {
-                                            Log.d("HomeActivity", "Виключено суму через відсоток: $amountStr")
-                                        }
-                                        if (num < 10.0) {
-                                            Log.d("HomeActivity", "Виключено суму через малий розмір: $amountStr")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Якщо координати недоступні або сума не знайдена, шукаємо в наступних рядках
-            if (candidates.isEmpty() || !boundingBoxAvailable) {
-                Log.d("HomeActivity", "Сума не знайдена з використанням координат, переходимо до пошуку в наступних рядках")
-                val lines = visionText.text.split("\n")
-                for (i in lines.indices) {
-                    val line = lines[i]
-                    if (keywords.any { keyword -> line.contains(keyword, ignoreCase = true) }) {
-                        // Шукаємо в наступних рядках (до 5 рядків)
-                        val nextLines = lines.subList(
-                            i,
-                            minOf(i + 6, lines.size)
-                        ).joinToString("\n")
-
-                        val amountMatches = amountRegex.findAll(nextLines)
-                        amountMatches.forEach { match ->
-                            val amountStr = match.groupValues[1].replace(",", ".")
-                            val num = amountStr.toDoubleOrNull() ?: return@forEach
+                        Log.d("HomeActivity", "Знайдено ключове слово в рядку: $lineText")
+                        val amountMatch = amountRegex.find(lineText)
+                        if (amountMatch != null) {
+                            val amountStr = amountMatch.groupValues[1].replace(",", ".")
+                            val num = amountStr.toDoubleOrNull() ?: continue
                             val digitCount = amountStr.replace(".", "").length
-                            val position = visionText.text.indexOf(match.value)
+                            val position = visionText.text.indexOf(amountMatch.value)
                             val isNotYear = num !in 1900.0..2099.0
-                            val isNotMultiplier = !visionText.text.contains(Regex("""\b${match.groupValues[1]}\b\s*[xX]""")) &&
-                                    !visionText.text.contains(Regex("""\d+\s*[xX]\s*${match.groupValues[1]}\b"""))
+                            val isNotMultiplier = !visionText.text.contains(Regex("""\b${amountMatch.groupValues[1]}\b\s*[xX]""")) &&
+                                    !visionText.text.contains(Regex("""\d+\s*[xX]\s*${amountMatch.groupValues[1]}\b"""))
                             val isNotDate = !isPartOfDate(amountStr, visionText.text, position)
                             val isNotPercentage = !isPartOfPercentage(amountStr, visionText.text, position)
 
                             val isNotExcluded = excludeKeywords.none { keyword ->
-                                val regex = Regex("""${keyword}\s*[:=]?\s*${match.groupValues[1]}""", RegexOption.IGNORE_CASE)
+                                val regex = Regex("""${keyword}\s*[:=]?\s*${amountMatch.groupValues[1]}""", RegexOption.IGNORE_CASE)
                                 regex.containsMatchIn(visionText.text)
                             }
 
-                            val hasCurrency = match.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
+                            val hasCurrency = amountMatch.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
 
-                            if (digitCount <= 6 && num in 10.0..100_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
+                            if (digitCount <= 8 && num in 1.0..1_000_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
                                 val roundedNum = roundToTwoDecimals(num)
-                                candidates.add(AmountCandidate(roundedNum, position, 0, "After keyword (next line): ${match.value}", hasCurrency, 0))
-                                Log.d("HomeActivity", "Знайдено суму в наступних рядках: $roundedNum (позиція: $position, має валюту: $hasCurrency)")
-                            } else {
-                                if (!isNotExcluded) {
-                                    Log.d("HomeActivity", "Виключено суму через excludeKeywords: $amountStr")
+                                candidates.add(AmountCandidate(roundedNum, position, 0, "In same line: ${amountMatch.value}", hasCurrency, 0))
+                                Log.d("HomeActivity", "Знайдено суму в тому ж рядку: $roundedNum (позиція: $position, має валюту: $hasCurrency)")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Якщо не знайдено в тому ж рядку і дозволено шукати в наступних, шукаємо з координатами
+            if (searchNextLines) {
+                var boundingBoxAvailable = false
+                for (block in visionText.textBlocks) {
+                    for (line in block.lines) {
+                        val lineText = line.text
+                        if (keywords.any { keyword -> lineText.contains(keyword, ignoreCase = true) }) {
+                            val keywordElement = line.elements.firstOrNull { element ->
+                                keywords.any { keyword -> element.text.contains(keyword, ignoreCase = true) }
+                            } ?: continue
+
+                            val keywordBoundingBox = keywordElement.boundingBox
+                            if (keywordBoundingBox == null) {
+                                Log.d("HomeActivity", "boundingBox для ключового слова '${keywordElement.text}' недоступний (null)")
+                                continue
+                            }
+
+                            boundingBoxAvailable = true
+                            val keywordX = keywordBoundingBox.left
+                            val keywordY = keywordBoundingBox.top
+                            Log.d("HomeActivity", "Знайдено ключове слово '${keywordElement.text}' на позиції (x: $keywordX, y: $keywordY)")
+
+                            for (otherBlock in visionText.textBlocks) {
+                                for (otherLine in otherBlock.lines) {
+                                    for (element in otherLine.elements) {
+                                        val amountMatch = amountRegex.find(element.text) ?: continue
+                                        val amountStr = amountMatch.groupValues[1].replace(",", ".")
+                                        val num = amountStr.toDoubleOrNull() ?: continue
+                                        val digitCount = amountStr.replace(".", "").length
+                                        val elementBoundingBox = element.boundingBox
+                                        if (elementBoundingBox == null) {
+                                            Log.d("HomeActivity", "boundingBox для елемента '${element.text}' недоступний (null)")
+                                            continue
+                                        }
+
+                                        val elementX = elementBoundingBox.left
+                                        val elementY = elementBoundingBox.top
+                                        Log.d("HomeActivity", "Знайдено елемент '${element.text}' на позиції (x: $elementX, y: $elementY)")
+
+                                        if (elementX <= keywordX) continue
+                                        val yDifference = Math.abs(elementY - keywordY)
+                                        if (yDifference > 100) continue
+
+                                        val isNotYear = num !in 1900.0..2099.0
+                                        val isNotMultiplier = !visionText.text.contains(Regex("""\b${amountMatch.groupValues[1]}\b\s*[xX]""")) &&
+                                                !visionText.text.contains(Regex("""\d+\s*[xX]\s*${amountMatch.groupValues[1]}\b"""))
+                                        val isNotDate = !isPartOfDate(amountStr, visionText.text, visionText.text.indexOf(amountStr))
+                                        val isNotPercentage = !isPartOfPercentage(amountStr, visionText.text, visionText.text.indexOf(amountStr))
+
+                                        val isNotExcluded = excludeKeywords.none { keyword ->
+                                            val regex = Regex("""${keyword}\s*[:=]?\s*${amountMatch.groupValues[1]}""", RegexOption.IGNORE_CASE)
+                                            regex.containsMatchIn(visionText.text)
+                                        }
+
+                                        val hasCurrency = amountMatch.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
+
+                                        if (digitCount <= 8 && num in 1.0..1_000_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
+                                            val roundedNum = roundToTwoDecimals(num)
+                                            candidates.add(AmountCandidate(roundedNum, elementX, elementY, "After keyword: ${element.text}", hasCurrency, yDifference))
+                                            Log.d("HomeActivity", "Знайдено суму праворуч від ключового слова: $roundedNum (x: $elementX, y: $elementY, має валюту: $hasCurrency, yDifference: $yDifference)")
+                                        }
+                                    }
                                 }
-                                if (!isNotDate) {
-                                    Log.d("HomeActivity", "Виключено суму через формат дати: $amountStr")
+                            }
+                        }
+                    }
+                }
+
+                // Якщо координати недоступні, шукаємо в наступних рядках
+                if (!boundingBoxAvailable) {
+                    Log.d("HomeActivity", "Сума не знайдена з використанням координат, переходимо до пошуку в наступних рядках")
+                    val lines = visionText.text.split("\n")
+                    for (i in lines.indices) {
+                        val line = lines[i]
+                        if (keywords.any { keyword -> line.contains(keyword, ignoreCase = true) }) {
+                            val nextLines = lines.subList(i, minOf(i + 6, lines.size)).joinToString("\n")
+                            val amountMatches = amountRegex.findAll(nextLines)
+                            amountMatches.forEach { match ->
+                                val amountStr = match.groupValues[1].replace(",", ".")
+                                val num = amountStr.toDoubleOrNull() ?: return@forEach
+                                val digitCount = amountStr.replace(".", "").length
+                                val position = visionText.text.indexOf(match.value)
+                                val isNotYear = num !in 1900.0..2099.0
+                                val isNotMultiplier = !visionText.text.contains(Regex("""\b${match.groupValues[1]}\b\s*[xX]""")) &&
+                                        !visionText.text.contains(Regex("""\d+\s*[xX]\s*${match.groupValues[1]}\b"""))
+                                val isNotDate = !isPartOfDate(amountStr, visionText.text, position)
+                                val isNotPercentage = !isPartOfPercentage(amountStr, visionText.text, position)
+
+                                val isNotExcluded = excludeKeywords.none { keyword ->
+                                    val regex = Regex("""${keyword}\s*[:=]?\s*${match.groupValues[1]}""", RegexOption.IGNORE_CASE)
+                                    regex.containsMatchIn(visionText.text)
                                 }
-                                if (!isNotPercentage) {
-                                    Log.d("HomeActivity", "Виключено суму через відсоток: $amountStr")
-                                }
-                                if (num < 10.0) {
-                                    Log.d("HomeActivity", "Виключено суму через малий розмір: $amountStr")
+
+                                val hasCurrency = match.value.contains(Regex("""грн|UAH|rpH\.|TPH""", RegexOption.IGNORE_CASE))
+
+                                if (digitCount <= 8 && num in 1.0..1_000_000.0 && isNotYear && isNotMultiplier && isNotDate && isNotPercentage && isNotExcluded) {
+                                    val roundedNum = roundToTwoDecimals(num)
+                                    candidates.add(AmountCandidate(roundedNum, position, 0, "After keyword (next line): ${match.value}", hasCurrency, 0))
+                                    Log.d("HomeActivity", "Знайдено суму в наступних рядках: $roundedNum (позиція: $position, має валюту: $hasCurrency)")
                                 }
                             }
                         }
                     }
                 }
             }
+            return candidates.isNotEmpty()
+        }
+
+        // Спочатку шукаємо "До сплати"
+        if (!findAmount(primaryKeywords, searchNextLines = true)) {
+            // Якщо "До сплати" не знайдено, шукаємо "Сума"
+            findAmount(secondaryKeywords, searchNextLines = true)
         }
 
         // Обираємо найкращого кандидата
         if (candidates.isNotEmpty()) {
-            // Спочатку обираємо тих, у кого є позначка валюти
-            val withCurrency = candidates.filter { it.hasCurrency }
+            // Спочатку фільтруємо кандидатів, які не є відсотками
+            val nonPercentageCandidates = candidates.filter { !isPartOfPercentage(it.amount.toString(), visionText.text, visionText.text.indexOf(it.amount.toString())) }
+            val finalCandidates = if (nonPercentageCandidates.isNotEmpty()) nonPercentageCandidates else candidates
+
+            // Вибираємо кандидата з валютою, якщо є
+            val withCurrency = finalCandidates.filter { it.hasCurrency }
             val selectedCandidate = if (withCurrency.isNotEmpty()) {
-                withCurrency.minByOrNull { it.yDistance } // Обираємо суму з найменшою відстанню по Y
+                // Якщо є кандидати з валютою, вибираємо найбільшу суму
+                withCurrency.maxByOrNull { it.amount }
             } else {
-                candidates.minByOrNull { it.yDistance } // Обираємо суму з найменшою відстанню по Y
+                // Якщо немає кандидатів з валютою, вибираємо найбільшу суму
+                finalCandidates.maxByOrNull { it.amount }
             }
+
             val roundedAmount = roundToTwoDecimals(selectedCandidate?.amount ?: 0.0)
             Log.d("HomeActivity", "Обрано суму: $roundedAmount (джерело: ${selectedCandidate?.source}, yDistance: ${selectedCandidate?.yDistance})")
-            return formatToTwoDecimals(roundedAmount) // Повертаємо суму як рядок із двома знаками після коми
+            return formatToTwoDecimals(roundedAmount)
         }
 
         Log.d("HomeActivity", "Не знайдено суми після ключових слів")
-        return "0.00" // Повертаємо "0.00" замість "0.0" для консистентності
+        return "0.00"
     }
     internal fun setupRetrofit(): MonobankApi {
         val retrofit = Retrofit.Builder()
@@ -444,7 +419,7 @@ fun saveAllIncomes(incomes: List<Income>, sharedPreferences: SharedPreferences) 
     val json = gson.toJson(incomes)
     sharedPreferences.edit().putString("all_incomes", json).apply()
 }
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(expenseViewModel: ExpenseViewModel, sharedPreferences: SharedPreferences, activity: HomeActivity) {
     val expenses by expenseViewModel.expenses
@@ -503,7 +478,6 @@ fun HomeScreen(expenseViewModel: ExpenseViewModel, sharedPreferences: SharedPref
                     val expenseStr = try {
                         sharedPreferences.getString(key, "0.00") ?: "0.00"
                     } catch (e: ClassCastException) {
-                        // Якщо значення збережене як Float, конвертуємо його в String
                         val floatValue = sharedPreferences.getFloat(key, 0f)
                         floatValue.toString()
                     }
@@ -669,375 +643,266 @@ fun HomeScreen(expenseViewModel: ExpenseViewModel, sharedPreferences: SharedPref
             Log.d("HomeActivity", "Список поточних витрат обнулено")
         }
     }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F7FA))
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF1A3D62), Color(0xFF2E5B8C))
-                    )
-                )
-        )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "FinanceFlow",
-                    style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = "Історія",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.clickable { showHistoryDialog = true }.padding(8.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .shadow(8.dp, RoundedCornerShape(16.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    Text(
-                        text = "Мої кошти",
-                        style = TextStyle(color = Color(0xFF1A3D62), fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "₴ $balance",
-                        style = TextStyle(color = Color(0xFF1A3D62), fontSize = 36.sp, fontWeight = FontWeight.Bold)
-
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                ActionButton(text = "₴", onClick = { selectedCategory = ""; showDialog = true }, icon = true)
-                ActionButton(
-                    text = "Аналіз",
-                    onClick = { context.startActivity(Intent(context, StatisticsActivity::class.java)) }
-                )
-                ActionButton(
-                    text = "Чат",
-                    onClick = { context.startActivity(Intent(context, AIChatActivity::class.java)) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(56.dp))
-
-            Text(
-                text = "Мої витрати",
-                style = TextStyle(color = Color(0xFF1A3D62), fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.5f)
-                    .padding(horizontal = 16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(scrollState)
-                ) {
-                    categories.forEach { category ->
-                        CategoryCard(
-                            category = category,
-                            amount = categoriesBalance.value[category] ?: BigDecimal.ZERO,
-                            onClick = { selectedCategory = category; showDialog = true }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-            }
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .clickable { showExchangeRates = !showExchangeRates }
-                    .shadow(4.dp, RoundedCornerShape(12.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFE6E6E6)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "Курс валют",
-                        style = TextStyle(
-                            color = Color.Black,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        modifier = Modifier.align(Alignment.Start)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    if (errorMessage != null || exchangeRates.isEmpty()) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = errorMessage ?: "Завантаження курсів валют...",
-                            style = TextStyle(
-                                color = Color.Gray,
-                                fontSize = 14.sp
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center
+                            text = "FinanceFlow",
+                            style = TextStyle(color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                         )
-                    } else {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "🇺🇸",
-                                        fontSize = 20.sp,
-                                        modifier = Modifier.padding(end = 4.dp)
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "Долар США",
-                                            style = TextStyle(
-                                                color = Color.Black,
-                                                fontSize = 12.sp
-                                            )
-                                        )
-                                        Text(
-                                            text = "${exchangeRates.firstOrNull { rate -> rate.currency == "USD" }?.buy ?: 0.0} / ${exchangeRates.firstOrNull { rate -> rate.currency == "USD" }?.sell ?: 0.0}",
-                                            style = TextStyle(
-                                                color = Color.Black,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        )
-                                    }
-                                }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "🇪🇺",
-                                        fontSize = 20.sp,
-                                        modifier = Modifier.padding(end = 4.dp)
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "Євро",
-                                            style = TextStyle(
-                                                color = Color.Black,
-                                                fontSize = 12.sp
-                                            )
-                                        )
-                                        Text(
-                                            text = "${exchangeRates.firstOrNull { rate -> rate.currency == "EUR" }?.buy ?: 0.0} / ${exchangeRates.firstOrNull { rate -> rate.currency == "EUR" }?.sell ?: 0.0}",
-                                            style = TextStyle(
-                                                color = Color.Black,
-                                                fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        )
-                                    }
-                                }
+                            IconButton(onClick = { showHistoryDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Історія",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            IconButton(onClick = {
+                                context.startActivity(Intent(context, ProfileActivity::class.java))
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountCircle,
+                                    contentDescription = "Профіль",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
                             }
                         }
                     }
-                }
-            }
-
-            if (showExchangeRates) {
-                Card(
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF1A3D62)
+                )
+            )
+        },
+        content = { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .background(Color(0xFFF5F7FA))
+            ) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .shadow(4.dp, RoundedCornerShape(12.dp)),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    shape = RoundedCornerShape(12.dp)
+                        .height(125.dp)
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Color(0xFF1A3D62), Color(0xFF2E5B8C))
+                            )
+                        )
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
+
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .verticalScroll(exchangeRatesScrollState)
-                            .padding(16.dp)
+                            .padding(horizontal = 16.dp)
+                            .shadow(8.dp, RoundedCornerShape(16.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Text(
-                            text = "Курси валют",
-                            style = TextStyle(
-                                color = Color(0xFF1A3D62),
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            Text(
+                                text = "Мої кошти",
+                                style = TextStyle(color = Color(0xFF1A3D62), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "₴ $balance",
+                                style = TextStyle(color = Color(0xFF1A3D62), fontSize = 36.sp, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
 
-                        if (errorMessage != null || exchangeRates.isEmpty()) {
-                            Text(
-                                text = errorMessage ?: "Завантаження курсів валют...",
-                                style = TextStyle(
-                                    color = Color.Gray,
-                                    fontSize = 14.sp
-                                ),
-                                modifier = Modifier.fillMaxWidth(),
-                                textAlign = TextAlign.Center
-                            )
-                        } else {
-                            Text(
-                                text = "Основні курси",
-                                style = TextStyle(
-                                    color = Color(0xFF1A3D62),
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Валюта",
-                                    style = TextStyle(
-                                        color = Color(0xFF1A3D62),
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                )
-                                Row {
-                                    Text(
-                                        text = "Купівля / Продаж",
-                                        style = TextStyle(
-                                            color = Color(0xFF1A3D62),
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(
+                                    onClick = { selectedCategory = ""; showDialog = true },
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .background(
+                                            Color(0xFF4A7BA6).copy(alpha = 0.1f),
+                                            CircleShape
                                         )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Додати",
+                                        tint = Color(0xFF1A3D62),
+                                        modifier = Modifier.size(32.dp)
                                     )
                                 }
+                                Text(
+                                    text = "Додати",
+                                    style = TextStyle(
+                                        color = Color(0xFF1A3D62),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            val mainRates = exchangeRates.filter { rate -> rate.currency in listOf("USD", "EUR", "EUR/USD") }
-                            mainRates.forEach { rate ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = getCurrencyFlag(rate.currency),
-                                            style = TextStyle(fontSize = 16.sp),
-                                            modifier = Modifier.padding(end = 4.dp)
-                                        )
-                                        Text(
-                                            text = if (rate.currency == "EUR/USD") "EUR/USD" else rate.currency,
-                                            style = TextStyle(
-                                                color = Color(0xFF1A3D62),
-                                                fontSize = 14.sp
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(
+                                    onClick = {
+                                        context.startActivity(
+                                            Intent(
+                                                context,
+                                                StatisticsActivity::class.java
                                             )
                                         )
-                                    }
-                                    Text(
-                                        text = "${rate.buy} / ${rate.sell}",
-                                        style = TextStyle(
-                                            color = Color(0xFF1A3D62),
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold
+                                    },
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .background(
+                                            Color(0xFF4A7BA6).copy(alpha = 0.1f),
+                                            CircleShape
                                         )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.BarChart,
+                                        contentDescription = "Аналіз",
+                                        tint = Color(0xFF1A3D62),
+                                        modifier = Modifier.size(32.dp)
                                     )
                                 }
-                            }
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            Text(
-                                text = "Курси платіжних систем",
-                                style = TextStyle(
-                                    color = Color(0xFF1A3D62),
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
                                 Text(
-                                    text = "Валюта",
+                                    text = "Аналіз",
                                     style = TextStyle(
                                         color = Color(0xFF1A3D62),
-                                        fontSize = 14.sp,
+                                        fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
-                                    )
+                                    ),
+                                    modifier = Modifier.padding(top = 4.dp)
                                 )
-                                Row {
-                                    Text(
-                                        text = "Продаж",
-                                        style = TextStyle(
-                                            color = Color(0xFF1A3D62),
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium
+                            }
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(
+                                    onClick = {
+                                        context.startActivity(
+                                            Intent(
+                                                context,
+                                                AIChatActivity::class.java
+                                            )
                                         )
+                                    },
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .background(
+                                            Color(0xFF4A7BA6).copy(alpha = 0.1f),
+                                            CircleShape
+                                        )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Chat,
+                                        contentDescription = "Чат",
+                                        tint = Color(0xFF1A3D62),
+                                        modifier = Modifier.size(32.dp)
                                     )
                                 }
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            val paymentSystemRates = exchangeRates.filter { rate -> rate.currency !in listOf("USD", "EUR", "EUR/USD") }
-                            Log.d("HomeActivity", "Курси платіжних систем: $paymentSystemRates")
-                            if (paymentSystemRates.isEmpty()) {
                                 Text(
-                                    text = "Немає даних про курси платіжних систем",
+                                    text = "Чат",
+                                    style = TextStyle(
+                                        color = Color(0xFF1A3D62),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Text(
+                        text = "Мої витрати",
+                        style = TextStyle(color = Color(0xFF1A3D62), fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        textAlign = TextAlign.Center )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(0.5f)
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(scrollState)
+                        ) {
+                            categories.forEach { category ->
+                                CategoryCard(
+                                    category = category,
+                                    amount = categoriesBalance.value[category] ?: BigDecimal.ZERO,
+                                    onClick = { selectedCategory = category; showDialog = true }
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clickable { showExchangeRates = !showExchangeRates }
+                            .shadow(4.dp, RoundedCornerShape(12.dp)),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE6E6E6)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = "Курс валют",
+                                style = TextStyle(
+                                    color = Color.Black,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                modifier = Modifier.align(Alignment.Start)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (errorMessage != null || exchangeRates.isEmpty()) {
+                                Text(
+                                    text = errorMessage ?: "Завантаження курсів валют...",
                                     style = TextStyle(
                                         color = Color.Gray,
                                         fontSize = 14.sp
@@ -1046,380 +911,618 @@ fun HomeScreen(expenseViewModel: ExpenseViewModel, sharedPreferences: SharedPref
                                     textAlign = TextAlign.Center
                                 )
                             } else {
-                                paymentSystemRates.forEach { rate ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = getCurrencyFlag(rate.currency),
-                                                style = TextStyle(fontSize = 16.sp),
+                                                text = "🇺🇸",
+                                                fontSize = 20.sp,
                                                 modifier = Modifier.padding(end = 4.dp)
                                             )
-                                            Text(
-                                                text = rate.currency,
-                                                style = TextStyle(
-                                                    color = Color(0xFF1A3D62),
-                                                    fontSize = 14.sp
+                                            Column {
+                                                Text(
+                                                    text = "Долар США",
+                                                    style = TextStyle(
+                                                        color = Color.Black,
+                                                        fontSize = 12.sp
+                                                    )
                                                 )
-                                            )
+                                                Text(
+                                                    text = "${exchangeRates.firstOrNull { rate -> rate.currency == "USD" }?.buy ?: 0.0} / ${exchangeRates.firstOrNull { rate -> rate.currency == "USD" }?.sell ?: 0.0}",
+                                                    style = TextStyle(
+                                                        color = Color.Black,
+                                                        fontSize = 14.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                )
+                                            }
                                         }
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "🇪🇺",
+                                                fontSize = 20.sp,
+                                                modifier = Modifier.padding(end = 4.dp)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = "Євро",
+                                                    style = TextStyle(
+                                                        color = Color.Black,
+                                                        fontSize = 12.sp
+                                                    )
+                                                )
+                                                Text(
+                                                    text = "${exchangeRates.firstOrNull { rate -> rate.currency == "EUR" }?.buy ?: 0.0} / ${exchangeRates.firstOrNull { rate -> rate.currency == "EUR" }?.sell ?: 0.0}",
+                                                    style = TextStyle(
+                                                        color = Color.Black,
+                                                        fontSize = 14.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (showExchangeRates) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .shadow(4.dp, RoundedCornerShape(12.dp)),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 200.dp)
+                                    .verticalScroll(exchangeRatesScrollState)
+                                    .padding(16.dp)
+                            ) {
+                                Text(
+                                    text = "Курси валют",
+                                    style = TextStyle(
+                                        color = Color(0xFF1A3D62),
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                if (errorMessage != null || exchangeRates.isEmpty()) {
+                                    Text(
+                                        text = errorMessage ?: "Завантаження курсів валют...",
+                                        style = TextStyle(
+                                            color = Color.Gray,
+                                            fontSize = 14.sp
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textAlign = TextAlign.Center
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Основні курси",
+                                        style = TextStyle(
+                                            color = Color(0xFF1A3D62),
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
                                         Text(
-                                            text = "${rate.sell}",
+                                            text = "Валюта",
                                             style = TextStyle(
                                                 color = Color(0xFF1A3D62),
                                                 fontSize = 14.sp,
-                                                fontWeight = FontWeight.Bold
+                                                fontWeight = FontWeight.Medium
                                             )
+                                        )
+                                        Row {
+                                            Text(
+                                                text = "Купівля / Продаж",
+                                                style = TextStyle(
+                                                    color = Color(0xFF1A3D62),
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    val mainRates = exchangeRates.filter { rate -> rate.currency in listOf("USD", "EUR", "EUR/USD") }
+                                    mainRates.forEach { rate ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = getCurrencyFlag(rate.currency),
+                                                    style = TextStyle(fontSize = 16.sp),
+                                                    modifier = Modifier.padding(end = 4.dp)
+                                                )
+                                                Text(
+                                                    text = if (rate.currency == "EUR/USD") "EUR/USD" else rate.currency,
+                                                    style = TextStyle(
+                                                        color = Color(0xFF1A3D62),
+                                                        fontSize = 14.sp
+                                                    )
+                                                )
+                                            }
+                                            Text(
+                                                text = "${rate.buy} / ${rate.sell}",
+                                                style = TextStyle(
+                                                    color = Color(0xFF1A3D62),
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Text(
+                                        text = "Курси платіжних систем",
+                                        style = TextStyle(
+                                            color = Color(0xFF1A3D62),
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Валюта",
+                                            style = TextStyle(
+                                                color = Color(0xFF1A3D62),
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        )
+                                        Row {
+                                            Text(
+                                                text = "Продаж",
+                                                style = TextStyle(
+                                                    color = Color(0xFF1A3D62),
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    val paymentSystemRates = exchangeRates.filter { rate -> rate.currency !in listOf("USD", "EUR", "EUR/USD") }
+                                    Log.d("HomeActivity", "Курси платіжних систем: $paymentSystemRates")
+                                    if (paymentSystemRates.isEmpty()) {
+                                        Text(
+                                            text = "Немає даних про курси платіжних систем",
+                                            style = TextStyle(
+                                                color = Color.Gray,
+                                                fontSize = 14.sp
+                                            ),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            textAlign = TextAlign.Center
+                                        )
+                                    } else {
+                                        paymentSystemRates.forEach { rate ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 4.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = getCurrencyFlag(rate.currency),
+                                                        style = TextStyle(fontSize = 16.sp),
+                                                        modifier = Modifier.padding(end = 4.dp)
+                                                    )
+                                                    Text(
+                                                        text = rate.currency,
+                                                        style = TextStyle(
+                                                            color = Color(0xFF1A3D62),
+                                                            fontSize = 14.sp
+                                                        )
+                                                    )
+                                                }
+                                                Text(
+                                                    text = "${rate.sell}",
+                                                    style = TextStyle(
+                                                        color = Color(0xFF1A3D62),
+                                                        fontSize = 14.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = { showAddCategoryDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .height(56.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3D62)),
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                    ) {
+                        Text(text = "Додати категорію", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    )
+
+    if (showAddCategoryDialog) {
+        ModernDialog(
+            title = "Додати нову категорію витрат",
+            onDismiss = { showAddCategoryDialog = false },
+            content = {
+                Column {
+                    availableCategories.forEach { category ->
+                        val isSelected = selectedCategories.value.contains(category)
+                        Button(
+                            onClick = {
+                                selectedCategories.value = selectedCategories.value.toMutableSet().apply {
+                                    if (isSelected) remove(category) else add(category)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF1A3D62) else Color(0xFFCCC8C8)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = category,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isSelected) Color.White else Color.Black
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = newCategoryName,
+                        onValueChange = { newCategoryName = it },
+                        label = { Text("Інше") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+            },
+            confirmAction = {
+                if (newCategoryName.isNotBlank()) {
+                    categories.add(newCategoryName)
+                    expenseViewModel.addCategory(newCategoryName)
+                    categoriesBalance.value[newCategoryName] = BigDecimal.ZERO
+                    saveCategories(categories)
+                    newCategoryName = ""
+                    showAddCategoryDialog = false
+                } else if (selectedCategories.value.isNotEmpty()) {
+                    selectedCategories.value.forEach { category ->
+                        categories.add(category)
+                        expenseViewModel.addCategory(category)
+                        categoriesBalance.value[category] = BigDecimal.ZERO
+                        availableCategories.remove(category)
+                    }
+                    saveCategories(categories)
+                    saveAvailableCategories(availableCategories)
+                    selectedCategories.value.clear()
+                    showAddCategoryDialog = false
+                }
+            }
+        )
+    }
+
+    if (showDialog) {
+        ModernDialog(
+            title = if (selectedCategory.isEmpty()) "Додати дохід" else "Введіть суму витрат для $selectedCategory",
+            onDismiss = { showDialog = false },
+            content = {
+                Column {
+                    if (selectedCategory.isEmpty()) {
+                        var expanded by remember { mutableStateOf(false) }
+                        val alpha by animateFloatAsState(
+                            targetValue = if (expanded) 1f else 0f,
+                            animationSpec = tween(durationMillis = 300)
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Button(
+                                    onClick = {
+                                        Log.d("DropdownMenu", "Button clicked, expanding dropdown")
+                                        expanded = true
+                                    },
+                                    modifier = Modifier
+                                        .width(200.dp)
+                                        .height(48.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.White,
+                                        contentColor = Color.Black
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = selectedIncomeSource,
+                                            color = if (selectedIncomeSource == incomeSources[0]) Color.Gray else Color.Black,
+                                            fontSize = 16.sp,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Icon(
+                                            imageVector = if (expanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                                            contentDescription = null,
+                                            tint = Color.Gray
                                         )
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
 
-            Button(
-                onClick = { showAddCategoryDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3D62)),
-                shape = RoundedCornerShape(12.dp),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-            ) {
-                Text(text = "Додати категорію", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        if (showAddCategoryDialog) {
-            ModernDialog(
-                title = "Додати нову категорію витрат",
-                onDismiss = { showAddCategoryDialog = false },
-                content = {
-                    Column {
-                        availableCategories.forEach { category ->
-                            val isSelected = selectedCategories.value.contains(category)
-                            Button(
-                                onClick = {
-                                    selectedCategories.value = selectedCategories.value.toMutableSet().apply {
-                                        if (isSelected) remove(category) else add(category)
+                                DropdownMenu(
+                                    expanded = expanded,
+                                    onDismissRequest = {
+                                        Log.d("DropdownMenu", "Dropdown dismissed")
+                                        expanded = false
+                                    },
+                                    modifier = Modifier
+                                        .width(200.dp)
+                                        .heightIn(max = 200.dp)
+                                        .background(Color.White, RoundedCornerShape(12.dp))
+                                        .alpha(alpha)
+                                ) {
+                                    incomeSources.forEach { source ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    source,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp),
+                                                    fontSize = 16.sp,
+                                                    color = Color(0xFF1A3D62),
+                                                    textAlign = TextAlign.Start
+                                                )
+                                            },
+                                            onClick = {
+                                                Log.d("DropdownMenu", "Selected source: $source")
+                                                selectedIncomeSource = source
+                                                expanded = false
+                                                if (source != "Інше") {
+                                                    customIncomeSource = ""
+                                                }
+                                            }
+                                        )
+                                        Divider(color = Color(0xFFE0E0E0), thickness = 0.5.dp)
                                     }
-                                },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isSelected) Color(0xFF1A3D62) else Color(0xFFCCC8C8)
-                                ),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(
-                                    text = category,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (isSelected) Color.White else Color.Black
-                                )
+                                }
                             }
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        OutlinedTextField(
-                            value = newCategoryName,
-                            onValueChange = { newCategoryName = it },
-                            label = { Text("Інше") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                    }
-                },
-                confirmAction = {
-                    if (newCategoryName.isNotBlank()) {
-                        categories.add(newCategoryName)
-                        expenseViewModel.addCategory(newCategoryName)
-                        categoriesBalance.value[newCategoryName] = BigDecimal.ZERO
-                        saveCategories(categories)
-                        newCategoryName = ""
-                        showAddCategoryDialog = false
-                    } else if (selectedCategories.value.isNotEmpty()) {
-                        selectedCategories.value.forEach { category ->
-                            categories.add(category)
-                            expenseViewModel.addCategory(category)
-                            categoriesBalance.value[category] = BigDecimal.ZERO
-                            availableCategories.remove(category)
-                        }
-                        saveCategories(categories)
-                        saveAvailableCategories(availableCategories)
-                        selectedCategories.value.clear()
-                        showAddCategoryDialog = false
-                    }
-                }
-            )
-        }
 
-        if (showDialog) {
-            ModernDialog(
-                title = if (selectedCategory.isEmpty()) "Додати дохід" else "Введіть суму витрат для $selectedCategory",
-                onDismiss = { showDialog = false },
-                content = {
-                    Column {
-                        if (selectedCategory.isEmpty()) {
-                            var expanded by remember { mutableStateOf(false) }
-                            val alpha by animateFloatAsState(
-                                targetValue = if (expanded) 1f else 0f,
-                                animationSpec = tween(durationMillis = 300)
-                            )
-
-                            Row(
+                        if (selectedIncomeSource == "Інше") {
+                            OutlinedTextField(
+                                value = customIncomeSource,
+                                onValueChange = { customIncomeSource = it },
+                                label = { Text("Вкажіть джерело") },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = inputAmount,
+                            onValueChange = { inputAmount = it },
+                            label = { Text("Сума") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        if (selectedCategory.isNotEmpty()) {
+                            IconButton(
+                                onClick = { showImageSourceDialog = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(Color(0xFF4A7BA6), CircleShape)
                             ) {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            Log.d("DropdownMenu", "Button clicked, expanding dropdown")
-                                            expanded = true
-                                        },
-                                        modifier = Modifier
-                                            .width(200.dp)
-                                            .height(48.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color.White,
-                                            contentColor = Color.Black
-                                        ),
-                                        shape = RoundedCornerShape(12.dp),
-                                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 12.dp)
-                                        ) {
-                                            Text(
-                                                text = selectedIncomeSource,
-                                                color = if (selectedIncomeSource == incomeSources[0]) Color.Gray else Color.Black,
-                                                fontSize = 16.sp,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            Icon(
-                                                imageVector = if (expanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                                contentDescription = null,
-                                                tint = Color.Gray
-                                            )
-                                        }
-                                    }
-
-                                    DropdownMenu(
-                                        expanded = expanded,
-                                        onDismissRequest = {
-                                            Log.d("DropdownMenu", "Dropdown dismissed")
-                                            expanded = false
-                                        },
-                                        modifier = Modifier
-                                            .width(200.dp)
-                                            .heightIn(max = 200.dp)
-                                            .background(Color.White, RoundedCornerShape(12.dp))
-                                            .alpha(alpha)
-                                    ) {
-                                        incomeSources.forEach { source ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        source,
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(12.dp),
-                                                        fontSize = 16.sp,
-                                                        color = Color(0xFF1A3D62),
-                                                        textAlign = TextAlign.Start
-                                                    )
-                                                },
-                                                onClick = {
-                                                    Log.d("DropdownMenu", "Selected source: $source")
-                                                    selectedIncomeSource = source
-                                                    expanded = false
-                                                    if (source != "Інше") {
-                                                        customIncomeSource = ""
-                                                    }
-                                                }
-                                            )
-                                            Divider(color = Color(0xFFE0E0E0), thickness = 0.5.dp)
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (selectedIncomeSource == "Інше") {
-                                OutlinedTextField(
-                                    value = customIncomeSource,
-                                    onValueChange = { customIncomeSource = it },
-                                    label = { Text("Вкажіть джерело") },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(bottom = 8.dp),
-                                    shape = RoundedCornerShape(8.dp)
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Сканувати чек",
+                                    tint = Color.White
                                 )
                             }
                         }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = inputAmount,
-                                onValueChange = { inputAmount = it },
-                                label = { Text("Сума") },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 8.dp),
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            if (selectedCategory.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { showImageSourceDialog = true },
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .background(Color(0xFF4A7BA6), CircleShape)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CameraAlt,
-                                        contentDescription = "Сканувати чек",
-                                        tint = Color.White
-                                    )
-                                }
-                            }
-                        }
                     }
-                },
-                confirmAction = {
-                    val amount = try {
-                        BigDecimal(inputAmount)
-                    } catch (e: NumberFormatException) {
-                        BigDecimal.ZERO
-                    }
-                    val currentDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
-                    if (selectedCategory.isEmpty()) {
-                        val finalIncomeSource = if (selectedIncomeSource == "Інше" && customIncomeSource.isNotBlank()) {
-                            customIncomeSource
-                        } else {
-                            selectedIncomeSource
-                        }
-
-                        val newBalance = balance + amount
-                        saveBalance(newBalance)
-
-                        val allIncomes = loadAllIncomes(sharedPreferences).toMutableList()
-                        val newIncome = Income(finalIncomeSource, amount, currentDate)
-                        allIncomes.add(newIncome)
-                        saveAllIncomes(allIncomes, sharedPreferences)
-
-                        val incomes = loadIncomes(sharedPreferences).toMutableList()
-                        incomes.add(newIncome)
-                        saveIncomes(incomes, sharedPreferences)
-                    } else {
-                        val currentAmount = BigDecimal(categoriesBalance.value[selectedCategory]?.toString() ?: "0.0")
-                        val newAmount = currentAmount.add(amount)
-                        categoriesBalance.value[selectedCategory] = newAmount
-                        sharedPreferences.edit().putFloat("expense_$selectedCategory", newAmount.toFloat()).apply()
-
-                        val newBalance = balance - amount
-                        Log.d("HomeActivity", "Поточний баланс: $balance, Витрата: $amount, Новий баланс: $newBalance")
-                        if (newBalance >= BigDecimal.ZERO) {
-                            saveBalance(newBalance)
-                        } else {
-                            saveBalance(newBalance)
-                            android.widget.Toast.makeText(context, "Недостатньо коштів! Баланс: ₴$newBalance", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-
-                        val allExpenses = loadAllExpenses(sharedPreferences).toMutableList()
-                        val newExpense = Expense(selectedCategory, amount, currentDate)
-                        allExpenses.add(newExpense)
-                        saveAllExpenses(allExpenses, sharedPreferences)
-
-                        currentExpenses = (currentExpenses + newExpense).toMutableList()
-                        saveExpenses(currentExpenses, sharedPreferences)
-
-                        expenseViewModel.addExpense(selectedCategory, amount, currentDate)
-                    }
-                    inputAmount = ""
-                    showDialog = false
                 }
-            )
-        }
-
-        if (showImageSourceDialog) {
-            AlertDialog(
-                onDismissRequest = { showImageSourceDialog = false },
-                title = {
-                    Text(
-                        text = "Виберіть джерело",
-                        style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A3D62))
-                    )
-                },
-                text = {
-                    Column {
-                        TextButton(
-                            onClick = {
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                                    activity.onImageProcessed = { extractedAmount ->
-                                        inputAmount = extractedAmount
-                                    }
-                                    activity.cameraLauncher.launch(null)
-                                    showImageSourceDialog = false
-                                } else {
-                                    activity.requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Камера", color = Color(0xFF1A3D62), fontSize = 16.sp)
-                        }
-                        TextButton(
-                            onClick = {
-                                activity.onImageProcessed = { extractedAmount ->
-                                    inputAmount = extractedAmount
-                                }
-                                activity.galleryLauncher.launch("image/*")
-                                showImageSourceDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Галерея", color = Color(0xFF1A3D62), fontSize = 16.sp)
-                        }
+            },
+            confirmAction = {
+                Log.d("HomeActivity", "Обрана сума перед додаванням: $inputAmount")
+                val cleanedAmount = inputAmount.replace(",", ".") // Замінюємо кому на крапку
+                val amount = try {
+                    BigDecimal(cleanedAmount)
+                } catch (e: NumberFormatException) {
+                    Log.e("HomeActivity", "Помилка парсингу суми: ${e.message}")
+                    BigDecimal.ZERO
+                }
+                val currentDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
+                if (selectedCategory.isEmpty()) {
+                    val finalIncomeSource = if (selectedIncomeSource == "Інше" && customIncomeSource.isNotBlank()) {
+                        customIncomeSource
+                    } else {
+                        selectedIncomeSource
                     }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { showImageSourceDialog = false }) {
-                        Text("Скасувати", color = Color.Gray)
-                    }
-                },
-                shape = RoundedCornerShape(16.dp),
-                containerColor = Color.White
-            )
-        }
 
-        if (showHistoryDialog) {
-            HistoryDialog(
-                expenses = loadAllExpenses(sharedPreferences),
-                incomes = loadAllIncomes(sharedPreferences),
-                onDismiss = { showHistoryDialog = false }
-            )
-        }
+                    val newBalance = balance + amount
+                    saveBalance(newBalance)
+
+                    val allIncomes = loadAllIncomes(sharedPreferences).toMutableList()
+                    val newIncome = Income(finalIncomeSource, amount, currentDate)
+                    allIncomes.add(newIncome)
+                    saveAllIncomes(allIncomes, sharedPreferences)
+
+                    val incomes = loadIncomes(sharedPreferences).toMutableList()
+                    incomes.add(newIncome)
+                    saveIncomes(incomes, sharedPreferences)
+                } else {
+                    val currentAmount = BigDecimal(categoriesBalance.value[selectedCategory]?.toString() ?: "0.0")
+                    val newAmount = currentAmount.add(amount)
+                    categoriesBalance.value[selectedCategory] = newAmount
+                    sharedPreferences.edit().putFloat("expense_$selectedCategory", newAmount.toFloat()).apply()
+
+                    val newBalance = balance - amount
+                    Log.d("HomeActivity", "Поточний баланс: $balance, Витрата: $amount, Новий баланс: $newBalance")
+                    if (newBalance >= BigDecimal.ZERO) {
+                        saveBalance(newBalance)
+                    } else {
+                        saveBalance(newBalance)
+                        android.widget.Toast.makeText(context, "Недостатньо коштів! Баланс: ₴$newBalance", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+
+                    val allExpenses = loadAllExpenses(sharedPreferences).toMutableList()
+                    val newExpense = Expense(selectedCategory, amount, currentDate)
+                    allExpenses.add(newExpense)
+                    saveAllExpenses(allExpenses, sharedPreferences)
+
+                    currentExpenses = (currentExpenses + newExpense).toMutableList()
+                    saveExpenses(currentExpenses, sharedPreferences)
+
+                    expenseViewModel.addExpense(selectedCategory, amount, currentDate)
+                }
+                inputAmount = ""
+                showDialog = false
+            }
+        )
     }
-}
+
+    if (showImageSourceDialog) {
+        var isProcessing by remember { mutableStateOf(false) }
+        LaunchedEffect(isProcessing) {
+            if (isProcessing) {
+                delay(2000) // Затримка для завершення розпізнавання (можна налаштувати)
+                isProcessing = false
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showImageSourceDialog = false },
+            title = {
+                Text(
+                    text = "Виберіть джерело",
+                    style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1A3D62))
+                )
+            },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                isProcessing = true
+                                activity.onImageProcessed = { extractedAmount ->
+                                    inputAmount = extractedAmount // Оновлюємо inputAmount
+                                    Log.d("HomeActivity", "Оновлено inputAmount після сканування: $inputAmount")
+                                    showImageSourceDialog = false // Закриваємо після оновлення
+                                }
+                                activity.cameraLauncher.launch(null)
+                            } else {
+                                activity.requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Камера", color = Color(0xFF1A3D62), fontSize = 16.sp)
+                    }
+                    TextButton(
+                        onClick = {
+                            isProcessing = true
+                            activity.onImageProcessed = { extractedAmount ->
+                                inputAmount = extractedAmount // Оновлюємо inputAmount
+                                Log.d("HomeActivity", "Оновлено inputAmount після галереї: $inputAmount")
+                                showImageSourceDialog = false // Закриваємо після оновлення
+                            }
+                            activity.galleryLauncher.launch("image/*")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Галерея", color = Color(0xFF1A3D62), fontSize = 16.sp)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showImageSourceDialog = false }) {
+                    Text("Скасувати", color = Color.Gray)
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = Color.White
+        )
+    }
+
+    if (showHistoryDialog) {
+        HistoryDialog(
+            expenses = loadAllExpenses(sharedPreferences),
+            incomes = loadAllIncomes(sharedPreferences),
+            onDismiss = { showHistoryDialog = false }
+        )
+    }}
 
 @Composable
 fun HistoryDialog(

@@ -11,7 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
-// Кольори для інших сторінок додатка (залишаємо як є)
+// Кольори для інших сторінок додатка
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
     secondary = PurpleGrey80,
@@ -70,37 +70,40 @@ private val AIChatLightColorScheme = lightColorScheme(
     onSurface = AIChatOnSurface
 )
 
-// Загальна тема для додатку
-@Composable
-fun Theme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
-    useAIChatTheme: Boolean = false, // Додаємо параметр для вибору теми AIChat
-    content: @Composable () -> Unit
-) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        useAIChatTheme -> if (darkTheme) AIChatDarkColorScheme else AIChatLightColorScheme
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+// Кольори для FinanceFlow
+private val FinanceFlowLightColorScheme = lightColorScheme(
+    primary = Color(0xFF1A3D62), // Темно-синій для основних елементів
+    onPrimary = Color.White, // Білий текст на основному кольорі
+    secondary = Color(0xFF4A7BA6), // Світліший синій для другорядних елементів
+    onSecondary = Color.White, // Білий текст на другорядному кольорі
+    background = Color(0xFFF5F7FA), // Світло-сірий фон
+    onBackground = Color(0xFF1A3D62), // Темно-синій текст на фоні
+    surface = Color(0xFFEFF5FF), // Сніжно-білий із блакитним підтоном для карток
+    onSurface = Color(0xFF1A3D62), // Темно-синій текст на картках
+    surfaceVariant = Color(0xFFE6E6E6), // Для карток курсів валют
+    onSurfaceVariant = Color.Black
+)
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
-}
+private val FinanceFlowDarkColorScheme = darkColorScheme(
+    primary = Color(0xFF2E5B8C), // Трішки світліший синій для темної теми
+    onPrimary = Color.White,
+    secondary = Color(0xFF4A7BA6),
+    onSecondary = Color.White,
+    background = Color(0xFF121212), // Темний фон
+    onBackground = Color(0xFFE0E0E0), // Світлий текст на темному фоні
+    surface = Color(0xFF2A2A2A), // Темні картки
+    onSurface = Color(0xFFE0E0E0), // Світлий текст на картках
+    surfaceVariant = Color(0xFF2C2C2C), // Для карток курсів валют
+    onSurfaceVariant = Color(0xFFE0E0E0)
+)
 
-// Тема для фінансового додатку (залишаємо для сумісності)
+// Єдина тема для додатку
 @Composable
 fun FinanceFlowTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
-    useAIChatTheme: Boolean = false, // Додаємо параметр для вибору теми AIChat
+    useAIChatTheme: Boolean = false, // Параметр для вибору теми AIChat
+    useFinanceFlowTheme: Boolean = true, // Параметр для вибору теми FinanceFlow
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -109,6 +112,7 @@ fun FinanceFlowTheme(
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         useAIChatTheme -> if (darkTheme) AIChatDarkColorScheme else AIChatLightColorScheme
+        useFinanceFlowTheme -> if (darkTheme) FinanceFlowDarkColorScheme else FinanceFlowLightColorScheme
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }

@@ -40,8 +40,33 @@
 
         <!-- HomeActivity (активність домашнього екрану) -->
         <activity android:name=".HomeActivity" />
+
+        <!-- StatisticsActivity -->
         <activity android:name=".StatisticsActivity" />
+
+        <!-- AIChatActivity -->
         <activity android:name=".AIChatActivity" />
+
+        <!-- EmailVerificationActivity -->
+        <activity android:name=".EmailVerificationActivity" />
+        <activity android:name=".ProfileActivity" />
+        <activity android:name=".SettingsActivity" />
+
+        <!-- ResetPasswordActivity з deep link -->
+        <activity
+            android:name=".ResetPasswordActivity"
+            android:exported="true"
+            android:theme="@style/Theme.FinanceFlow">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="928086273612.firebaseapp.com"
+                    android:pathPrefix="/__/auth/action" />
+            </intent-filter>
+        </activity>
 
     </application>
 
