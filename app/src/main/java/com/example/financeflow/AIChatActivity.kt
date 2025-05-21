@@ -1,188 +1,823 @@
 package com.example.financeflow
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.shape.RoundedCornerShape
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import android.util.Log
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import com.example.financeflow.ui.theme.FinanceFlowTheme
+import com.example.financeflow.viewmodel.Expense
+import com.example.financeflow.viewmodel.Income
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.util.Log
+import java.math.BigDecimal
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import com.example.financeflow.loadAllExpenses
+import com.example.financeflow.loadAllIncomes
 
 class AIChatActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
-            AIChatScreen(this) { finish() } // Обработка кнопки "Назад"
+            FinanceFlowTheme(darkTheme = false, useAIChatTheme = true) {
+                AIChatScreen(
+                    context = this@AIChatActivity,
+                    onBackPressed = { finish() }
+                )
+            }
         }
     }
 }
 
 @Composable
 fun AIChatScreen(context: Context, onBackPressed: () -> Unit) {
+    val sharedPreferences = context.getSharedPreferences("finance_flow_prefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+
+    // Завантажуємо історію чату
+    val savedChatHistoryJson = sharedPreferences.getString("chat_history", null)
+    val initialChatHistory = if (savedChatHistoryJson != null) {
+        val type = object : TypeToken<MutableList<String>>() {}.type
+        Gson().fromJson(savedChatHistoryJson, type) ?: mutableListOf("AI: Привіт! Я твій фінансовий асистент. Як я можу допомогти?")
+    } else {
+        mutableListOf("AI: Привіт! Я твій фінансовий асистент. Як я можу допомогти?")
+    }
+
+    val chatHistory = remember { mutableStateListOf<String>().apply { addAll(initialChatHistory) } }
     var userInput by remember { mutableStateOf("") }
-    val chatHistory = remember { mutableStateListOf("Привет! Как я могу помочь?") }
     val isLoading = remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
 
-    Column(
+    // Нові заготовлені запитання
+    val predefinedQuestions = listOf(
+        "Які мої найбільші витрати за останні 30 днів?",
+        "Скільки я витратив на продукти цього місяця?",
+        "Який у мене баланс після всіх витрат і доходів?",
+        "Чи можу я дозволити собі покупку за 2000 гривень?",
+        "Які категорії витрат я можу скоротити?",
+        "Скільки я заробив за останні 3 місяці?",
+        "Як змінились мої доходи порівняно з минулим місяцем?",
+        "Який у мене фінансовий прогноз на наступний місяць?"
+    )
+
+    // Зберігаємо історію чату
+    LaunchedEffect(chatHistory) {
+        val chatHistoryJson = Gson().toJson(chatHistory)
+        editor.putString("chat_history", chatHistoryJson)
+        editor.apply()
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .background(Color(0xFFF5F5F5))
+            .background(Color(0xFFF5F7FA))
     ) {
-        Text(
-            text = "AI Ассистент",
-            style = TextStyle(
-                color = Color(0xFF1A3D62),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
-            ),
-            modifier = Modifier.padding(top = 20.dp, bottom = 20.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(150.dp)
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF1A3D62), Color(0xFF2E5B8C))
+                    )
+                )
         )
 
         Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .background(Color.White, RoundedCornerShape(12.dp))
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
+                .fillMaxSize()
+                .padding(top = 16.dp)
         ) {
-            chatHistory.forEach { message ->
-                Text(
-                    text = message,
-                    style = TextStyle(
-                        color = Color.Black,
-                        fontSize = 16.sp
-                    ),
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
-            if (isLoading.value) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = userInput,
-                onValueChange = { userInput = it },
-                label = { Text("Введите запрос") },
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
-                shape = RoundedCornerShape(12.dp)
-            )
-            Button(
-                onClick = {
-                    if (userInput.isNotBlank()) {
-                        chatHistory.add("Вы: $userInput")
-                        coroutineScope.launch {
-                            handleUserInput(userInput, chatHistory, isLoading, context)
-                        }
-                        userInput = ""
-                    }
-                },
-                modifier = Modifier.size(56.dp),
-                shape = RoundedCornerShape(50)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 24.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("🗨️", fontSize = 24.sp)
+                Text(
+                    text = "AI Асистент",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
             }
-        }
 
-        Button(
-            onClick = onBackPressed,
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3D62))
-        ) {
-            Text("Назад", color = Color.White)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 16.dp)
+                    .shadow(4.dp, RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                        .verticalScroll(scrollState)
+                ) {
+                    chatHistory.forEach { message ->
+                        Text(
+                            text = message,
+                            style = TextStyle(
+                                color = if (message.startsWith("AI:")) Color(0xFF1A3D62) else Color.Black,
+                                fontSize = 16.sp
+                            ),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                    if (isLoading.value) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Список заготовлених запитань
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 120.dp)
+                ) {
+                    items(predefinedQuestions) { question ->
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val isPressed by interactionSource.collectIsPressedAsState()
+                        val backgroundColor = if (isPressed) {
+                            Color(0xFF1A3D62).copy(alpha = 0.1f)
+                        } else {
+                            Color(0xFFF5F7FA).copy(alpha = 0.5f)
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .background(
+                                    color = backgroundColor,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable(
+                                    interactionSource = interactionSource,
+                                    indication = null
+                                ) {
+                                    chatHistory.add("Ви: $question")
+                                    coroutineScope.launch {
+                                        handleUserInput(question, chatHistory, isLoading, sharedPreferences, context)
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = null,
+                                tint = Color(0xFF1A3D62),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = question,
+                                style = TextStyle(
+                                    color = Color(0xFF1A3D62),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .shadow(4.dp, RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = userInput,
+                        onValueChange = { userInput = it },
+                        label = { Text("Введіть запит", color = Color(0xFF1A3D62)) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedIndicatorColor = Color(0xFF4A7BA6),
+                            unfocusedIndicatorColor = Color.Gray.copy(alpha = 0.5f),
+                            cursorColor = Color(0xFF1A3D62)
+                        )
+                    )
+
+                    Crossfade(targetState = userInput.isNotEmpty(), label = "ButtonTransition") { showSendButton ->
+                        if (showSendButton) {
+                            IconButton(
+                                onClick = {
+                                    if (userInput.isNotBlank()) {
+                                        val inputToSend = userInput
+                                        chatHistory.add("Ви: $inputToSend")
+                                        coroutineScope.launch {
+                                            handleUserInput(inputToSend, chatHistory, isLoading, sharedPreferences, context)
+                                        }
+                                        userInput = ""
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        color = Color(0xFF4A7BA6),
+                                        shape = RoundedCornerShape(50)
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Send,
+                                    contentDescription = "Відправити",
+                                    tint = Color.White
+                                )
+                            }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        handleFinancialAdvice(chatHistory, isLoading, sharedPreferences, context)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        color = Color(0xFF1A3D62),
+                                        shape = CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lightbulb,
+                                    contentDescription = "Отримати фінансову пораду",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Button(
+                onClick = onBackPressed,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .height(56.dp)
+                    .shadow(4.dp, RoundedCornerShape(12.dp)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A7BA6)),
+                shape = RoundedCornerShape(12.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+            ) {
+                Text(
+                    text = "Назад",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
 
-suspend fun handleUserInput(
-    input: String,
+suspend fun handleFinancialAdvice(
     chatHistory: MutableList<String>,
     isLoading: MutableState<Boolean>,
+    sharedPreferences: SharedPreferences,
     context: Context
 ) {
-    val apiKey = BuildConfig.GROK_API_KEY
-    val client = OkHttpClient()
-
-    val messages = listOf(
-        mapOf("role" to "system", "content" to "Вы - умный ассистент."),
-        mapOf("role" to "user", "content" to input)
-    )
-
-    val json = Gson().toJson(mapOf(
-        "messages" to messages,
-        "model" to "grok-2-latest", // Використовуйте потрібну модель
-        "stream" to false,
-        "temperature" to 0
-    ))
-
-    val body = RequestBody.create("application/json".toMediaTypeOrNull(), json)
-    val request = Request.Builder()
-        .url("https://api.x.ai/v1/chat/completions") // Замінюємо URL на потрібний
-        .addHeader("Authorization", "Bearer $apiKey")
-        .addHeader("Content-Type", "application/json")
-        .post(body)
-        .build()
-
     isLoading.value = true
-
     try {
-        val response = client.newCall(request).execute()
-        val responseBody = response.body?.string()
-        Log.d("AIChatActivity", "Ответ от API: $responseBody")
+        val allExpenses = loadAllExpenses(sharedPreferences)
+        val allIncomes = loadAllIncomes(sharedPreferences)
+        val currentBalanceStr = sharedPreferences.getString("current_balance", "0.00") ?: "0.00"
+        val currentBalance = BigDecimal(currentBalanceStr)
 
-        if (response.isSuccessful && responseBody != null) {
-            val parsedResponse = parseGrokResponse(responseBody)
+        if (allExpenses.isEmpty() && allIncomes.isEmpty() && currentBalance == BigDecimal.ZERO) {
             withContext(Dispatchers.Main) {
-                chatHistory.add("AI: $parsedResponse")
+                chatHistory.add("AI: У вас немає фінансових даних. Додайте записи про витрати чи доходи!")
+            }
+            return
+        }
+
+        val expensesByCategory = allExpenses.groupBy { it.category }
+        val categoryTotals = expensesByCategory.mapValues { entry ->
+            entry.value.fold(BigDecimal.ZERO) { sum, expense -> sum + expense.amount }
+        }
+        val topCategory = categoryTotals.maxByOrNull { it.value }
+
+        val dateFormat = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+        val currentDate = Calendar.getInstance()
+        val threeMonthsAgo = Calendar.getInstance().apply { add(Calendar.MONTH, -3) }
+        val recentExpenses = allExpenses.filter { expense ->
+            val expenseDate = dateFormat.parse(expense.date) ?: return@filter false
+            val expenseCal = Calendar.getInstance().apply { time = expenseDate }
+            expenseCal.after(threeMonthsAgo) && expenseCal.before(currentDate)
+        }
+        val expensesByMonth = recentExpenses.groupBy { expense ->
+            val expenseDate = dateFormat.parse(expense.date) ?: return@groupBy "Unknown"
+            val cal = Calendar.getInstance().apply { time = expenseDate }
+            "${cal.get(Calendar.MONTH) + 1}.${cal.get(Calendar.YEAR)}"
+        }
+        val monthlyTotals = expensesByMonth.mapValues { entry ->
+            entry.value.fold(BigDecimal.ZERO) { sum, expense -> sum + expense.amount }
+        }
+
+        val userData = mapOf(
+            "current_balance" to currentBalance.toString(),
+            "total_expenses" to allExpenses.sumOf { it.amount }.toString(),
+            "total_incomes" to allIncomes.sumOf { it.amount }.toString(),
+            "expenses" to allExpenses,
+            "incomes" to allIncomes,
+            "top_category" to (topCategory?.key ?: "немає даних"),
+            "top_category_amount" to (topCategory?.value?.toString() ?: "0.00"),
+            "monthly_expense_trends" to monthlyTotals
+        )
+        val userDataJson = Gson().toJson(userData)
+
+        val systemPrompt = """
+            You are a financial assistant providing actionable advice based on the user's financial data.
+            User data: $userDataJson
+
+            ### Instructions:
+            - Analyze the user's financial data: current balance, total expenses, total incomes, top spending category, and monthly expense trends.
+            - Provide concise financial advice in Ukrainian (1-2 sentences).
+            - Focus on one actionable step to improve the user's financial situation:
+              - If the top category is significant, suggest reducing spending there.
+              - If the balance is low compared to expenses, suggest saving strategies.
+              - If incomes exceed expenses, encourage saving or investing.
+              - If monthly trends show increasing expenses, suggest reviewing spending habits.
+            - Respond in the format: "Фінансова порада: <your advice>."
+            - Current date: ${SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date())}
+        """.trimIndent()
+
+        val apiKey = BuildConfig.GROQ_API_KEY
+        if (apiKey.isBlank()) {
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: Помилка: API-ключ відсутній.")
+            }
+            return
+        }
+
+        val client = OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        val requestBody = JSONObject().apply {
+            put("model", "llama3-8b-8192")
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemPrompt)
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "Дай фінансову пораду")
+                })
+            })
+            put("max_tokens", 100)
+            put("temperature", 0.5)
+        }.toString()
+
+        val request = Request.Builder()
+            .url("https://api.groq.com/openai/v1/chat/completions")
+            .header("Authorization", "Bearer $apiKey")
+            .post(requestBody.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        var response: okhttp3.Response? = null
+        val maxRetries = 5
+        var attempt = 0
+        while (attempt < maxRetries && response == null) {
+            attempt++
+            try {
+                response = withContext(Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+            } catch (e: Exception) {
+                if (attempt == maxRetries) throw e
+                delay(3000L)
+            }
+        }
+
+        if (response != null && response.isSuccessful) {
+            val responseBody = response.body?.string()
+            val json = JSONObject(responseBody)
+            val advice = json.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: $advice")
             }
         } else {
             withContext(Dispatchers.Main) {
-                chatHistory.add("AI: Ошибка при подключении.")
-                Toast.makeText(context, "Ошибка подключения к AI.", Toast.LENGTH_SHORT).show()
+                chatHistory.add("AI: Не вдалося отримати пораду. Спробуйте ще раз пізніше.")
             }
         }
     } catch (e: Exception) {
         withContext(Dispatchers.Main) {
-            chatHistory.add("AI: Произошла ошибка.")
-            Log.e("AIChatActivity", "Ошибка API-запроса: ", e)
+            chatHistory.add("AI: Виникла помилка. Спробуйте ще раз.")
         }
     } finally {
         isLoading.value = false
     }
 }
 
-fun parseGrokResponse(responseBody: String): String {
-    val jsonResponse: Map<String, Any> = Gson().fromJson(responseBody, object : TypeToken<Map<String, Any>>() {}.type)
-    val choices = jsonResponse["choices"] as? List<Map<String, Any>> ?: return "Неизвестный ответ"
-    val message = choices.firstOrNull()?.get("message") as? Map<*, *>
-    return message?.get("content") as? String ?: "Неизвестный ответ"
+fun parseMonthAndYearFromInput(input: String): Pair<Int, Int> {
+    val inputLower = input.lowercase()
+    val currentDate = Calendar.getInstance()
+    val currentYear = currentDate.get(Calendar.YEAR)
+    var targetMonth = currentDate.get(Calendar.MONTH) + 1
+    var targetYear = currentYear
+
+    val monthMap = mapOf(
+        "січень" to 1, "січня" to 1, "лютий" to 2, "лютого" to 2,
+        "березень" to 3, "березня" to 3, "квітень" to 4, "квітня" to 4,
+        "травень" to 5, "травня" to 5, "червень" to 6, "червня" to 6,
+        "липень" to 7, "липня" to 7, "серпень" to 8, "серпня" to 8,
+        "вересень" to 9, "вересня" to 9, "жовтень" to 10, "жовтня" to 10,
+        "листопад" to 11, "листопада" to 11, "грудень" to 12, "грудня" to 12
+    )
+
+    for ((monthName, monthNumber) in monthMap) {
+        if (inputLower.contains(monthName)) {
+            targetMonth = monthNumber
+            break
+        }
+    }
+
+    val yearMatch = Regex("\\b(20\\d{2})\\b").find(inputLower)
+    if (yearMatch != null) {
+        targetYear = yearMatch.value.toInt()
+    }
+
+    return Pair(targetMonth, targetYear)
+}
+
+fun isMonthSpecificQuery(input: String): Boolean {
+    val inputLower = input.lowercase()
+    val monthKeywords = listOf(
+        "січень", "січня", "лютий", "лютого", "березень", "березня",
+        "квітень", "квітня", "травень", "травня", "червень", "червня",
+        "липень", "липня", "серпень", "серпня", "вересень", "вересня",
+        "жовтень", "жовтня", "листопад", "листопада", "грудень", "грудня"
+    )
+    return monthKeywords.any { inputLower.contains(it) }
+}
+
+fun isComparisonQuery(input: String): Boolean {
+    val inputLower = input.lowercase()
+    return inputLower.contains("найбільше") || inputLower.contains("найменше") || inputLower.contains("порівняно") || inputLower.contains("прогноз")
+}
+
+suspend fun handleUserInput(
+    input: String,
+    chatHistory: MutableList<String>,
+    isLoading: MutableState<Boolean>,
+    sharedPreferences: SharedPreferences,
+    context: Context
+) {
+    isLoading.value = true
+    try {
+        val allExpenses = loadAllExpenses(sharedPreferences)
+        val allIncomes = loadAllIncomes(sharedPreferences)
+        val currentBalanceStr = sharedPreferences.getString("current_balance", "0.00") ?: "0.00"
+        val currentBalance = BigDecimal(currentBalanceStr)
+
+        if (allExpenses.isEmpty() && allIncomes.isEmpty() && currentBalance == BigDecimal.ZERO) {
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: У вас немає фінансових даних. Додайте записи про витрати чи доходи!")
+            }
+            return
+        }
+
+        val isMonthSpecific = isMonthSpecificQuery(input)
+        val isComparison = isComparisonQuery(input)
+
+        val expensesToSend: List<Expense>
+        val incomesToSend: List<Income>
+        val totalExpenses: BigDecimal
+        val totalIncomes: BigDecimal
+
+        if (isMonthSpecific && !isComparison) {
+            val (targetMonth, targetYear) = parseMonthAndYearFromInput(input)
+            val dateFormat = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+            expensesToSend = allExpenses.filter { expense ->
+                try {
+                    val expenseDate = dateFormat.parse(expense.date)
+                    val expenseCalendar = Calendar.getInstance().apply { time = expenseDate }
+                    val expenseMonth = expenseCalendar.get(Calendar.MONTH) + 1
+                    val expenseYear = expenseCalendar.get(Calendar.YEAR)
+                    expenseMonth == targetMonth && expenseYear == targetYear
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            incomesToSend = allIncomes.filter { income ->
+                try {
+                    val incomeDate = dateFormat.parse(income.date)
+                    val incomeCalendar = Calendar.getInstance().apply { time = incomeDate }
+                    val incomeMonth = incomeCalendar.get(Calendar.MONTH) + 1
+                    val incomeYear = incomeCalendar.get(Calendar.YEAR)
+                    incomeMonth == targetMonth && incomeYear == targetYear
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            totalExpenses = expensesToSend.sumOf { it.amount }
+            totalIncomes = incomesToSend.sumOf { it.amount }
+        } else {
+            expensesToSend = allExpenses
+            incomesToSend = allIncomes
+            totalExpenses = allExpenses.sumOf { it.amount }
+            totalIncomes = allIncomes.sumOf { it.amount }
+        }
+
+        val dateFormat = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+        val currentDate = Calendar.getInstance()
+        val threeMonthsAgo = Calendar.getInstance().apply { add(Calendar.MONTH, -3) }
+        val thirtyDaysAgo = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -30) }
+
+        val recentExpenses = allExpenses.filter { expense ->
+            val expenseDate = dateFormat.parse(expense.date) ?: return@filter false
+            val expenseCal = Calendar.getInstance().apply { time = expenseDate }
+            expenseCal.after(threeMonthsAgo) && expenseCal.before(currentDate)
+        }
+        val expensesLast30Days = allExpenses.filter { expense ->
+            val expenseDate = dateFormat.parse(expense.date) ?: return@filter false
+            val expenseCal = Calendar.getInstance().apply { time = expenseDate }
+            expenseCal.after(thirtyDaysAgo)
+        }
+        val expensesByMonth = recentExpenses.groupBy { expense ->
+            val expenseDate = dateFormat.parse(expense.date) ?: return@groupBy "Unknown"
+            val cal = Calendar.getInstance().apply { time = expenseDate }
+            "${cal.get(Calendar.MONTH) + 1}.${cal.get(Calendar.YEAR)}"
+        }
+        val monthlyExpenseTotals = expensesByMonth.mapValues { entry ->
+            entry.value.fold(BigDecimal.ZERO) { sum, expense -> sum + expense.amount }
+        }
+        val incomesByMonth = allIncomes.filter { income ->
+            val incomeDate = dateFormat.parse(income.date) ?: return@filter false
+            val incomeCal = Calendar.getInstance().apply { time = incomeDate }
+            incomeCal.after(threeMonthsAgo) && incomeCal.before(currentDate)
+        }.groupBy { income ->
+            val incomeDate = dateFormat.parse(income.date) ?: return@groupBy "Unknown"
+            val cal = Calendar.getInstance().apply { time = incomeDate }
+            "${cal.get(Calendar.MONTH) + 1}.${cal.get(Calendar.YEAR)}"
+        }
+        val monthlyIncomeTotals = incomesByMonth.mapValues { entry ->
+            entry.value.fold(BigDecimal.ZERO) { sum, income -> sum + income.amount }
+        }
+
+        val inputLower = input.trim().lowercase()
+        when {
+            inputLower.contains("привіт") || inputLower.contains("добрий день") -> {
+                withContext(Dispatchers.Main) {
+                    chatHistory.add("AI: Привіт! Як я можу допомогти з твоїми фінансами?")
+                }
+                return
+            }
+            inputLower.contains("пока") || inputLower.contains("до побачення") -> {
+                withContext(Dispatchers.Main) {
+                    chatHistory.add("AI: До побачення! Звертайся, якщо потрібна допомога!")
+                }
+                return
+            }
+            inputLower.contains("дякую") || inputLower.contains("спасибі") -> {
+                withContext(Dispatchers.Main) {
+                    chatHistory.add("AI: Завжди радий допомогти! Пиши, якщо будуть ще питання.")
+                }
+                return
+            }
+        }
+
+        val userData = mapOf(
+            "current_balance" to currentBalance.toString(),
+            "total_expenses" to totalExpenses.toString(),
+            "total_incomes" to totalIncomes.toString(),
+            "expenses" to expensesToSend,
+            "incomes" to incomesToSend,
+            "expenses_last_30_days" to expensesLast30Days,
+            "monthly_expense_trends" to monthlyExpenseTotals,
+            "monthly_income_trends" to monthlyIncomeTotals
+        )
+        val userDataJson = Gson().toJson(userData)
+
+        val systemPrompt = """
+            You are a financial assistant helping the user manage their finances.
+            User data: $userDataJson
+            The "total_expenses" and "total_incomes" fields are pre-calculated sums for the provided data.
+            The "monthly_expense_trends" and "monthly_income_trends" fields show expenses and incomes grouped by month (e.g., "4.2025": 5000).
+            The "expenses_last_30_days" field contains expenses for the last 30 days.
+
+            ### Instructions for handling queries:
+            - When the user asks about the largest expenses in the last 30 days (e.g., "Які мої найбільші витрати за останні 30 днів?"):
+              1. Use the "expenses_last_30_days" list.
+              2. Sort expenses by amount in descending order.
+              3. List the top 3 expenses in the format: " - <date>: ₴<amount> (<category>)".
+              4. Respond in the format: "Ваші найбільші витрати за останні 30 днів:\n<list of top expenses>."
+
+            - When the user asks about expenses in a specific category for a month (e.g., "Скільки я витратив на продукти цього місяця?"):
+              1. Use the "expenses" list (already filtered for the specified month and year).
+              2. Filter expenses by the specified category (e.g., "продукти").
+              3. Calculate the total for that category.
+              4. Respond in the format: "Ви витратили ₴<total> на <category> за <month> <year>."
+
+            - When the user asks about their current balance (e.g., "Який у мене баланс після всіх витрат і доходів?"):
+              1. Use the "current_balance" field.
+              2. Respond in the format: "Ваш поточний баланс: ₴<current_balance>."
+
+            - When the user asks if they can afford a purchase (e.g., "Чи можу я дозволити собі покупку за 2000 гривень?"):
+              1. Extract the amount from the query (e.g., 2000).
+              2. Compare the amount with the "current_balance".
+              3. Respond in the format: "Так, ви можете дозволити покупку за ₴<amount>. Ваш баланс: ₴<current_balance>." or "Ні, вам не вистачить грошей на покупку за ₴<amount>. Ваш баланс: ₴<current_balance>."
+
+            - When the user asks about categories to reduce spending (e.g., "Які категорії витрат я можу скоротити?"):
+              1. Use the full "expenses" list.
+              2. Group expenses by category and calculate totals.
+              3. Identify the top 2 categories with the highest spending.
+              4. Respond in the format: "Ви можете скоротити витрати в таких категоріях:\n - <category>: ₴<total>\n - <category>: ₴<total>."
+
+            - When the user asks about total incomes over a period (e.g., "Скільки я заробив за останні 3 місяці?"):
+              1. Use the "incomes" list filtered for the last 3 months.
+              2. Calculate the total income.
+              3. Respond in the format: "Ви заробили ₴<total> за останні 3 місяці."
+
+            - When the user asks about income changes (e.g., "Як змінились мої доходи порівняно з минулим місяцем?"):
+              1. Use the "monthly_income_trends" field.
+              2. Compare the income of the current month with the previous month.
+              3. Respond in the format: "Ваші доходи <increased/decreased/stayed the same> порівняно з минулим місяцем: ₴<current_month> (цього місяця) проти ₴<previous_month> (минулого місяця)."
+
+            - When the user asks about a financial forecast (e.g., "Який у мене фінансовий прогноз на наступний місяць?"):
+              1. Use the "monthly_expense_trends" and "monthly_income_trends" to calculate average monthly expenses and incomes over the last 3 months.
+              2. Estimate the next month's balance as: current balance + average income - average expenses.
+              3. Respond in the format: "За моїми оцінками, ваш баланс наступного місяця може бути ₴<estimated_balance> (з урахуванням середніх доходів ₴<avg_income> і витрат ₴<avg_expenses>)."
+
+            - For other financial queries, use the provided data to respond accurately.
+            - If the question is not related to finances, respond as a general AI without mentioning financial data unless explicitly asked.
+
+            ### General rules:
+            - Respond only to the user's question.
+            - Keep responses concise and focused.
+            - Respond in Ukrainian.
+            - Use Ukrainian month names (e.g., "лютий" for February).
+            - Current date: ${SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date())}
+        """.trimIndent()
+
+        val apiKey = BuildConfig.GROQ_API_KEY
+        if (apiKey.isBlank()) {
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: Помилка: API-ключ відсутній.")
+            }
+            return
+        }
+
+        val client = OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        val requestBody = JSONObject().apply {
+            put("model", "llama3-8b-8192")
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemPrompt)
+                })
+                chatHistory.forEach { message ->
+                    if (message.startsWith("Ви: ")) {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", message.removePrefix("Ви: "))
+                        })
+                    } else if (message.startsWith("AI: ")) {
+                        put(JSONObject().apply {
+                            put("role", "assistant")
+                            put("content", message.removePrefix("AI: "))
+                        })
+                    }
+                }
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", input)
+                })
+            })
+            put("max_tokens", 300)
+            put("temperature", 0.5)
+        }.toString()
+
+        val request = Request.Builder()
+            .url("https://api.groq.com/openai/v1/chat/completions")
+            .header("Authorization", "Bearer $apiKey")
+            .post(requestBody.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        var response: okhttp3.Response? = null
+        val maxRetries = 5
+        var attempt = 0
+        while (attempt < maxRetries && response == null) {
+            attempt++
+            try {
+                response = withContext(Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+            } catch (e: Exception) {
+                if (attempt == maxRetries) throw e
+                delay(3000L)
+            }
+        }
+
+        if (response != null && response.isSuccessful) {
+            val responseBody = response.body?.string()
+            val json = JSONObject(responseBody)
+            val aiResponse = json.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: $aiResponse")
+            }
+        } else {
+            withContext(Dispatchers.Main) {
+                chatHistory.add("AI: Не вдалося обробити запит. Спробуйте ще раз.")
+            }
+        }
+    } catch (e: Exception) {
+        withContext(Dispatchers.Main) {
+            chatHistory.add("AI: Виникла помилка. Спробуйте ще раз.")
+        }
+    } finally {
+        isLoading.value = false
+    }
 }
